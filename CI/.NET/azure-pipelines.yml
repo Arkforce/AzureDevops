@@ -1,0 +1,41 @@
+trigger:
+  - master
+
+pool:
+  name: 'aws_ubuntu'  # Your self-hosted Ubuntu agent pool
+
+variables:
+  solution: '*.sln'
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Release'
+  dockerImageName: 'azizkhodzhaev/mywebapp'  # Docker Hub username and app name
+
+steps:
+- checkout: self  # Ensures the repository is available on the agent
+
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '8.x'
+    installationPath: '/home/ubuntu/dotnet'
+
+- script: |
+    dotnet restore $(Build.SourcesDirectory)/*.sln
+  displayName: 'Restore NuGet Packages'
+
+- script: |
+    dotnet build $(Build.SourcesDirectory)/*.sln --configuration $(buildConfiguration)
+  displayName: 'Build Project'
+
+- script: |
+    dotnet publish $(Build.SourcesDirectory)/*.sln --configuration $(buildConfiguration) --output $(Build.SourcesDirectory)/publish
+  displayName: 'Publish Project'
+
+- task: Docker@2
+  inputs:
+    containerRegistry: 'DockerHub'  # DockerHub service connection name
+    repository: $(dockerImageName)
+    command: 'buildAndPush'
+    Dockerfile: $(Build.SourcesDirectory)/Dockerfile
+    tags: 'latest'
+  displayName: 'Build and Push Docker Image to Docker Hub'
