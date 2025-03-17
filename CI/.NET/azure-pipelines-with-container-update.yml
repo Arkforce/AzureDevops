@@ -1,0 +1,78 @@
+trigger:
+  - master
+
+pool:
+  name: 'aws_ubuntu'  # Self-hosted Ubuntu agent pool
+
+variables:
+  solution: '**/*.sln'  
+  buildPlatform: 'Any CPU'
+  buildConfiguration: 'Release'
+  dockerImageName: 'azizkhodzhaev/mywebapp'  # DockerHub repository
+  imageTag: $(Build.BuildId)
+
+steps:
+- checkout: self  # Ensure repository is available
+
+# Install .NET SDK
+- task: UseDotNet@2
+  inputs:
+    packageType: 'sdk'
+    version: '8.x'
+    installationPath: '/home/ubuntu/dotnet'
+
+# Restore dependencies
+- script: |
+    dotnet restore $(Build.SourcesDirectory)/*.sln
+  displayName: 'Restore NuGet Packages'
+
+# Build the project
+- script: |
+    dotnet build $(Build.SourcesDirectory)/*.sln --configuration $(buildConfiguration) --no-restore
+  displayName: 'Build Project'
+
+# Publish the project
+- script: |
+    dotnet publish $(Build.SourcesDirectory)/*.sln --configuration $(buildConfiguration) --output $(Build.ArtifactStagingDirectory)/publish --no-restore
+  displayName: 'Publish Project'
+
+# Build and push Docker image
+- task: Docker@2
+  inputs:
+    containerRegistry: 'DockerHub'  
+    repository: $(dockerImageName)
+    command: 'buildAndPush'
+    Dockerfile: '$(Build.SourcesDirectory)/Dockerfile'
+    tags: $(imageTag)
+  displayName: 'Build and Push Docker Image'
+
+# Install and run Trivy for container security scanning
+- script: |
+    trivy image --severity HIGH,CRITICAL --format json -o $(Build.ArtifactStagingDirectory)/trivy-report.json $(dockerImageName):latest
+  displayName: 'Scan Docker Image with Trivy (JSON Report)'
+
+# Convert JSON to readable HTML (optional)
+- script: |
+    sudo apt-get install -y jq
+    cat $(Build.ArtifactStagingDirectory)/trivy-report.json | jq '.' > $(Build.ArtifactStagingDirectory)/trivy-report.html
+  displayName: 'Convert Trivy JSON to Readable HTML'
+
+# Publish Trivy scan report as an artifact
+- task: PublishBuildArtifacts@1
+  inputs:
+    PathtoPublish: '$(Build.ArtifactStagingDirectory)/trivy-report.html'
+    ArtifactName: 'TrivyScanReport'
+    publishLocation: 'Container'
+  displayName: 'Publish Trivy Vulnerability Report'
+- task: AzureCLI@2
+  inputs:
+    azureSubscription: 'Azure for ACA'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+
+      az containerapp update \
+        --name prod-app \
+        --resource-group container-app-rg \
+        --image azizkhodzhaev/mywebapp:$(imageTag) \
+  displayName: 'Update Azure Container App t'
